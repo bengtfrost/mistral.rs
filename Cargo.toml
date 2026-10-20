@@ -1,5 +1,25 @@
 [workspace]
 members = [
+  "mistralrs-server-core",
+  "mistralrs-cli",
+  "mistralrs-core",
+  "mistralrs-pyo3",
+  "mistralrs",
+  "mistralrs-vision",
+  "mistralrs-quant",
+  "mistralrs-paged-attn",
+  "mistralrs-metal-compile",
+  "mistralrs-flash-attn",
+
+  "mistralrs-audio",
+  "mistralrs-mcp",
+  "mistralrs-macros",
+  "mistralrs-code-exec",
+  "mistralrs-sandbox",
+  "crates/vulkex",
+]
+
+default-members = [
     "mistralrs-server-core",
     "mistralrs-cli",
     "mistralrs-core",
@@ -10,13 +30,13 @@ members = [
     "mistralrs-paged-attn",
     "mistralrs-metal-compile",
     "mistralrs-flash-attn",
-
     "mistralrs-audio",
     "mistralrs-mcp",
     "mistralrs-macros",
     "mistralrs-code-exec",
     "mistralrs-sandbox",
 ]
+
 resolver = "2"
 
 [workspace.package]
@@ -61,30 +81,35 @@ metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 futures = "0.3"
 clap = { version = "4.5.54", features = ["derive", "wrap_help"] }
-pyo3 = { version = "0.25.1", features = ["full", "extension-module", "either", "abi3-py310"] }
+pyo3 = { version = "0.25.1", features = [
+  "full",
+  "extension-module",
+  "either",
+  "abi3-py310",
+] }
 tokio = { version = "1.49.0", features = ["full", "rt-multi-thread"] }
 # All features but avif, avif increases the msrv dramatically
 image = { version = "0.25.9", default-features = false, features = [
-    'bmp',
-    'dds',
-    'exr',
-    'ff',
-    'gif',
-    'hdr',
-    'ico',
-    'jpeg',
-    'png',
-    'pnm',
-    'qoi',
-    'tga',
-    'tiff',
-    'webp',
+  'bmp',
+  'dds',
+  'exr',
+  'ff',
+  'gif',
+  'hdr',
+  'ico',
+  'jpeg',
+  'png',
+  'pnm',
+  'qoi',
+  'tga',
+  'tiff',
+  'webp',
 ] }
 reqwest = { version = "0.13.1", default-features = false, features = [
-    "blocking",
-    "rustls",
-    "charset",
-    "http2",
+  "blocking",
+  "rustls",
+  "charset",
+  "http2",
 ] }
 base64 = "0.22.1"
 tempfile = "3"
@@ -99,13 +124,15 @@ regex = "1.12.2"
 fancy-regex = "0.14.0"
 objc2-metal = "0.3.2"
 objc2-foundation = "0.3.2"
-dispatch2 = { version = "0.3.0", default-features = false, features = ["block2"] }
+dispatch2 = { version = "0.3.0", default-features = false, features = [
+  "block2",
+] }
 safetensors = "0.8.0"
 toml = "0.9.11"
 hf-hub = { version = "0.4.3", default-features = false, features = [
-    "ureq",
-    "tokio",
-    "rustls-tls",
+  "ureq",
+  "tokio",
+  "rustls-tls",
 ] }
 itertools = "0.14.0"
 rand = "0.9.3"
@@ -116,7 +143,11 @@ tokenizers = { version = "0.21.4", default-features = false }
 tokio-tungstenite = "0.28.0"
 tqdm = "0.8.0"
 chrono = "0.4.43"
-minijinja = { version = "2.14.0", features = ["builtins", "json", "preserve_order"] }
+minijinja = { version = "2.14.0", features = [
+  "builtins",
+  "json",
+  "preserve_order",
+] }
 minijinja-contrib = { version = "2.14.0", features = ["pycompat"] }
 regex-automata = { version = "0.4.13", features = ["meta"] }
 rustc-hash = "2.1.1"
@@ -131,7 +162,9 @@ rand_isaac = "0.4.0"
 indicatif = { version = "0.18.3", features = ["rayon"] }
 async-trait = "0.1.92"
 strum = { version = "0.27.2", features = ["derive"] }
-derive_more = { version = "2.1.1", default-features = false, features = ["from"] }
+derive_more = { version = "2.1.1", default-features = false, features = [
+  "from",
+] }
 akin = "0.4.0"
 variantly = "0.4.0"
 sysinfo = "0.36.1"
@@ -142,7 +175,9 @@ schemars = "1.2.0"
 serde-saphyr = "0.0.16"
 serde_plain = "1.0.2"
 as-any = "0.3.2"
-llguidance = { version = "1.2.0", default-features = false, features = ["lark"] }
+llguidance = { version = "1.2.0", default-features = false, features = [
+  "lark",
+] }
 toktrie_hf_tokenizers = "1.2.0"
 toktrie = "1.4.0"
 objc = { version = "0.2.7" }
@@ -159,7 +194,15 @@ ahash = "0.8.12"
 num-traits = "0.2.19"
 libc = "0.2.180"
 bm25 = "2.3.2"
-symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "flac", "vorbis", "wav", "isomp4", "ogg", "pcm"] }
+symphonia = { version = "0.5.5", default-features = false, features = [
+  "mp3",
+  "flac",
+  "vorbis",
+  "wav",
+  "isomp4",
+  "ogg",
+  "pcm",
+] }
 lazy_static = "1.5"
 paste = "1.0.15"
 byteorder = "1.5.0"
@@ -169,7 +212,9 @@ pyo3-build-config = "0.25.1"
 ctrlc = "3.5.1"
 directories = "6.0.0"
 # Need to keep rustyline at 15.0.0 as 16.0.0 has a breaking change that conficts with `ctrlc`'s handling
-rustyline = { version = "15.0.0", default-features = false, features = ["with-file-history"] }
+rustyline = { version = "15.0.0", default-features = false, features = [
+  "with-file-history",
+] }
 tower-http = "0.6.8"
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 futures-util = "0.3.31"
@@ -179,7 +224,10 @@ include_dir = "0.7.4"
 http = "1.4.0"
 http-body = "1.0.1"
 hyper = "1.8.1"
-rust-mcp-schema = { version = "0.9.5", default-features = false, features = ["schema_utils", "latest"] }
+rust-mcp-schema = { version = "0.9.5", default-features = false, features = [
+  "schema_utils",
+  "latest",
+] }
 cudaforge = "=0.1.6"
 rubato = "0.16.2"
 rustfft = "6.4.1"
