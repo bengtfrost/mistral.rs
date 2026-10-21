@@ -18,6 +18,8 @@ pub struct Context {
     pub cmd_pool: vk::CommandPool,
     pub fence: vk::Fence,
     pub mem_props: vk::PhysicalDeviceMemoryProperties,
+    /// True iff every host-visible memory type on this device reports
+    /// HOST_COHERENT. Diagnostic only; `Buffer::coherent` is per-allocation.
     pub all_host_visible_coherent: bool,
     pub validation_enabled: bool,
 }
@@ -148,8 +150,30 @@ impl Context {
         })
     }
 
-    /// Allocate a host-visible storage buffer. On this device the chosen
-    /// memory type is guaranteed host-coherent, so flush/invalidate are no-ops.
+    /// Allocate a host-visible storage buffer.
+    ///
+    /// `gpu-allocator` selects the memory type from `MemoryLocation::CpuToGpu`.
+    /// On a UMA device this typically resolves to a `DEVICE_LOCAL | HOST_VISIBLE`
+    /// type; on a discrete GPU it resolves to a staging type. The choice is the
+    /// allocator's, not this function's.
+    ///
+    /// The returned `Buffer::coherent` flag is read from the chosen memory type's
+    /// `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`. [`Context::flush`] and
+    /// [`Context::invalidate`] consult that flag and short-circuit on coherent
+    /// memory; on non-coherent memory they issue the corresponding
+    /// `vkFlushMappedMemoryRanges` / `vkInvalidateMappedMemoryRanges` calls.
+    /// Callers do not need to know which case they are in — calling flush after
+    /// host writes and invalidate before host reads is correct in both.
+    ///
+    /// # Safety
+    ///
+    /// - The caller must reclaim the returned buffer with [`Context::free_buffer`].
+    ///   Dropping the `Buffer` without freeing leaks the underlying `Allocation`.
+    /// - The buffer must not be accessed after `free_buffer` returns.
+    ///
+    /// [`Context::flush`]: Context::flush
+    /// [`Context::invalidate`]: Context::invalidate
+    /// [`Context::free_buffer`]: Context::free_buffer
     pub unsafe fn alloc_mapped(&mut self, size: u64) -> Result<Buffer> {
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::TRANSFER_SRC
@@ -174,6 +198,15 @@ impl Context {
                 .bind_buffer_memory(raw, alloc.memory(), alloc.offset())?
         };
 
+        // Coherence is per-allocation: read the flags of the memory type that
+        // gpu-allocator actually selected, not a device-wide approximation.
+        // On mixed-coherence devices this lets flush/invalidate run only when
+        // the specific allocation needs them.
+        let mem_type_idx = alloc.memory_type_index() as usize;
+        let coherent = self.mem_props.memory_types[mem_type_idx]
+            .property_flags
+            .contains(vk::MemoryPropertyFlags::HOST_COHERENT);
+
         let mapped = if alloc.mapped_ptr().is_some() {
             alloc.mapped_ptr().unwrap().as_ptr() as *mut u8
         } else {
@@ -182,11 +215,19 @@ impl Context {
 
         Ok(Buffer {
             raw,
-            memory: unsafe { alloc.memory() },
+            alloc,
             size,
-            coherent: self.all_host_visible_coherent,
+            coherent,
             mapped,
         })
+    }
+
+    /// Explicit free. `Buffer` must not be used after this call.
+    pub unsafe fn free_buffer(&mut self, buf: Buffer) {
+        unsafe { self.device.destroy_buffer(buf.raw, None) };
+        if let Err(e) = self.allocator.free(buf.alloc) {
+            log::warn!("allocator.free: {e:?}");
+        }
     }
 
     pub unsafe fn flush(&mut self, buf: &Buffer, report: &mut crate::fallback::FallbackReport) {
@@ -194,7 +235,7 @@ impl Context {
             return;
         }
         let r = vk::MappedMemoryRange::default()
-            .memory(buf.memory)
+            .memory(buf.memory())
             .offset(0)
             .size(vk::WHOLE_SIZE);
         unsafe { self.device.flush_mapped_memory_ranges(&[r]) }.ok();
@@ -210,7 +251,7 @@ impl Context {
             return;
         }
         let r = vk::MappedMemoryRange::default()
-            .memory(buf.memory)
+            .memory(buf.memory())
             .offset(0)
             .size(vk::WHOLE_SIZE);
         unsafe { self.device.invalidate_mapped_memory_ranges(&[r]) }.ok();
@@ -227,8 +268,14 @@ impl Drop for Context {
             if self.cmd_pool != vk::CommandPool::null() {
                 self.device.destroy_command_pool(self.cmd_pool, None);
             }
-            // Allocator must drop before device; gpu-allocator frees its pools.
-            // Replace with a no-op allocator to force immediate drop.
+            // `vkDestroyDevice` is not called here on purpose. The allocator
+            // (which drops after this method returns, before `device`) still
+            // needs a live VkDevice to free its pools. ash's `Device::drop`
+            // then frees function pointers but does not call vkDestroyDevice,
+            // so the device handle leaks per Context creation. Fixing this
+            // requires wrapping `allocator` in `ManuallyDrop` and dropping it
+            // explicitly before calling destroy_device — deferred to D1
+            // ("Context::drop does not call device.destroy_device(None)").
         }
     }
 }
