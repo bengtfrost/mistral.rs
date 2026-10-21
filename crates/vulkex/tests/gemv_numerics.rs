@@ -1,4 +1,4 @@
-use vulkex::FallbackReport;
+use vulkex::GemvSession;
 
 fn pseudo_random_f32(seed: u32, len: usize) -> Vec<f32> {
     let mut v = Vec::with_capacity(len);
@@ -10,6 +10,13 @@ fn pseudo_random_f32(seed: u32, len: usize) -> Vec<f32> {
     v
 }
 
+fn target_pci() -> Option<u32> {
+    std::env::var("VULKEX_PCI_ID").ok().and_then(|s| {
+        let s = s.trim();
+        u32::from_str_radix(s.strip_prefix("0x").unwrap_or(s), 16).ok()
+    })
+}
+
 #[test]
 fn gemv_fp32_matches_cpu_within_tolerance() {
     env_logger::builder().is_test(true).try_init().ok();
@@ -19,7 +26,6 @@ fn gemv_fp32_matches_cpu_within_tolerance() {
     let weights = pseudo_random_f32(0x9E3779B9, (rows * cols) as usize);
     let input = pseudo_random_f32(0x85EBCA6B, cols as usize);
 
-    // CPU reference computed in f64.
     let mut reference = vec![0f64; rows as usize];
     for r in 0..rows as usize {
         let base = r * cols as usize;
@@ -30,21 +36,25 @@ fn gemv_fp32_matches_cpu_within_tolerance() {
         reference[r] = s;
     }
 
-    let mut session = vulkex::GemvSession::new(Some(0x9b41)).expect("context");
-    let mut report = FallbackReport::default();
+    let mut session = GemvSession::new(target_pci()).expect("context");
+    assert!(
+        session.ctx.validation_enabled,
+        "VK_INSTANCE_LAYERS requested VK_LAYER_KHRONOS_validation but the layer is not loaded"
+    );
 
-    let w_buf =
-        unsafe { session.ctx.alloc_mapped((rows as u64) * (cols as u64) * 4) }.expect("w buf");
-    let x_buf = unsafe { session.ctx.alloc_mapped((cols as u64) * 4) }.expect("x buf");
-    let y_buf = unsafe { session.ctx.alloc_mapped((rows as u64) * 4) }.expect("y buf");
+    let w_buf = unsafe { session.ctx.alloc_mapped((rows as u64) * (cols as u64) * 4) }.unwrap();
+    let x_buf = unsafe { session.ctx.alloc_mapped((cols as u64) * 4) }.unwrap();
+    let y_buf = unsafe { session.ctx.alloc_mapped((rows as u64) * 4) }.unwrap();
 
-    let w_bytes: &[u8] =
-        unsafe { std::slice::from_raw_parts(weights.as_ptr() as *const u8, weights.len() * 4) };
-    let x_bytes: &[u8] =
-        unsafe { std::slice::from_raw_parts(input.as_ptr() as *const u8, input.len() * 4) };
     unsafe {
-        w_buf.write_bytes(w_bytes);
-        x_buf.write_bytes(x_bytes);
+        w_buf.write_bytes(std::slice::from_raw_parts(
+            weights.as_ptr() as *const u8,
+            weights.len() * 4,
+        ));
+        x_buf.write_bytes(std::slice::from_raw_parts(
+            input.as_ptr() as *const u8,
+            input.len() * 4,
+        ));
     }
 
     session.gemv(&w_buf, &x_buf, &y_buf, rows, cols);
@@ -68,10 +78,13 @@ fn gemv_fp32_matches_cpu_within_tolerance() {
          validation={}, coherent_heap={}",
         session.ctx.validation_enabled, session.ctx.all_host_visible_coherent
     );
-
     session.report.print();
-    // Alias the session's report for a sanity check on the Vulkan path.
-    report.submissions = session.report.submissions;
+
+    unsafe {
+        session.ctx.free_buffer(y_buf);
+        session.ctx.free_buffer(x_buf);
+        session.ctx.free_buffer(w_buf);
+    }
 
     assert!(max_abs < 1e-4, "abs diff too large: {max_abs}");
     assert!(max_rel < 1e-3, "rel diff too large: {max_rel}");
