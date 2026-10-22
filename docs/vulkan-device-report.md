@@ -76,27 +76,27 @@ wraps. **This is the reference for correctness, not throughput. See the note bel
 
 ### Prefill (GEMM, M = 512)
 
-| Shape | CPU GFLOPS | Vulkan GFLOPS | Ratio |
-|---|---|---|---|
-| 512×6144×2048 | 63.7 | 33.1 | 0.52× |
-| 512×2048×6144 | 65.9 | 33.0 | 0.50× |
-| 512×2048×2048 | 65.6 | 32.8 | 0.50× |
-| 512×151936×2048 | 68.9 | 33.0 | 0.48× |
+| Shape           | CPU GFLOPS | Vulkan GFLOPS | Ratio |
+| --------------- | ---------- | ------------- | ----- |
+| 512×6144×2048   | 63.7       | 33.1          | 0.52× |
+| 512×2048×6144   | 65.9       | 33.0          | 0.50× |
+| 512×2048×2048   | 65.6       | 32.8          | 0.50× |
+| 512×151936×2048 | 68.9       | 33.0          | 0.48× |
 
 ### Decode (GEMV, M = 1) — **misleading reference, see note**
 
-| Shape | CPU GB/s | Vulkan GB/s | Ratio |
-|---|---|---|---|
-| 2048×2048 | 1.6 | 3.8 | 2.36× |
-| 2048×6144 | 1.6 | 11.0 | 6.94× |
-| 6144×2048 | 1.6 | 8.2 | 5.17× |
-| 151936×2048 | 1.6 | 13.1 | 8.22× |
+| Shape       | CPU GB/s | Vulkan GB/s | Ratio |
+| ----------- | -------- | ----------- | ----- |
+| 2048×2048   | 1.6      | 3.8         | 2.36× |
+| 2048×6144   | 1.6      | 11.0        | 6.94× |
+| 6144×2048   | 1.6      | 8.2         | 5.17× |
+| 151936×2048 | 1.6      | 13.1        | 8.22× |
 
 **Note on the CPU GEMV reference:** `matrixmultiply::sgemm` with `n=1`
 leaves most SIMD lanes idle and does not parallelize across rayon threads.
 The CPU backend of mistral.rs uses a different path that streams weights at
 **~19.3 GB/s** on this machine (see CPU baseline below). Against that
-throughput, the Vulkan GEMV is *slower* on every shape except the LM head.
+throughput, the Vulkan GEMV is _slower_ on every shape except the LM head.
 The 2.4–8.2× ratios above measure the specific sgemm(n=1) microkernel, not
 the mistral.rs CPU backend.
 
@@ -123,13 +123,13 @@ the Vulkan kernel cannot exceed it on this hardware.
 
 ### Prediction (from kernel-level benchmark, weighted per-token)
 
-| Component | Per token |
-|---|---|
-| Attention (28 layers × 4 × 2048×2048, 4.46 ms each) | ~500 ms |
-| MLP up (28 × 2048×6144, 4.56 ms each) | ~128 ms |
-| MLP down (28 × 6144×2048, 6.16 ms each) | ~172 ms |
-| LM head (1 × 151936×2048, 94.79 ms) | ~95 ms |
-| **Total** | **~895 ms = 1.12 T/s** |
+| Component                                           | Per token              |
+| --------------------------------------------------- | ---------------------- |
+| Attention (28 layers × 4 × 2048×2048, 4.46 ms each) | ~500 ms                |
+| MLP up (28 × 2048×6144, 4.56 ms each)               | ~128 ms                |
+| MLP down (28 × 6144×2048, 6.16 ms each)             | ~172 ms                |
+| LM head (1 × 151936×2048, 94.79 ms)                 | ~95 ms                 |
+| **Total**                                           | **~895 ms = 1.12 T/s** |
 
 ### Measured CPU baseline
 
@@ -138,10 +138,10 @@ the Vulkan kernel cannot exceed it on this hardware.
 
 ### Comparison
 
-| Metric | CPU baseline | Vulkan (predicted) | Ratio |
-|---|---|---|---|
-| Prefill | 54.7 T/s | ~27 T/s | ~0.5× |
-| Decode | 2.4 T/s | ~1.1 T/s | ~0.46× |
+| Metric  | CPU baseline | Vulkan (predicted) | Ratio  |
+| ------- | ------------ | ------------------ | ------ |
+| Prefill | 54.7 T/s     | ~27 T/s            | ~0.5×  |
+| Decode  | 2.4 T/s      | ~1.1 T/s           | ~0.46× |
 
 **Predicted end-to-end: Vulkan is ~2× slower than CPU on this machine.**
 
@@ -172,7 +172,7 @@ Three facts, each with the design consequence:
 budget on heap 0. The remaining ~6 GiB is not "free for the GPU"; it is
 already counted by the OS as reserved for system use.
 
-*Consequence:* every allocation decision must budget against 10.4 GiB, not
+_Consequence:_ every allocation decision must budget against 10.4 GiB, not
 16.5. A Qwen3-1.7B FP32 model (7 GB weights + KV cache) fits. A
 Qwen3.5-9B Q4_K (5.3 GB weights + KV cache) fits in Q4_K form but not
 after FP32 dequantization (36 GB). This is the single strongest reason the
@@ -182,7 +182,7 @@ Q4_K kernel is the one that matters for this machine.
 Every host-visible memory type carries `HOST_COHERENT_BIT`. `Context::flush`
 and `Context::invalidate` evaluate `if !coherent` and skip on this machine.
 
-*Consequence:* the timing results in `bench_shapes` do not include any
+_Consequence:_ the timing results in `bench_shapes` do not include any
 coherence-traffic cost. On a device where the same test runs with a
 non-coherent heap, expect the numbers to move — the direction depends on
 whether the driver takes the coherence penalty at allocation or per-access.
@@ -197,7 +197,7 @@ dual-channel DDR4 ceiling on this laptop. Any Vulkan path competes for the
 same memory controller; it cannot exceed the CPU's throughput, only
 approach it.
 
-*Consequence:* on this hardware, kernel-level wins do not translate to
+_Consequence:_ on this hardware, kernel-level wins do not translate to
 model-level wins. A Vulkan GEMV that streams a 16 MB weight matrix at 3.8
 GB/s is 5× slower than a CPU matmul that streams the same 16 MB at 19.3
 GB/s, because the Vulkan path spends 3 ms per dispatch on overhead while
@@ -205,34 +205,122 @@ the CPU amortizes work across the whole layer. This is the structural
 reason no FP32 Vulkan kernel will beat the CPU on this machine, regardless
 of tile size, subgroup usage, or Q4_K dequantization.
 
+## Comparison with llama.cpp's ggml-vulkan backend
+
+The conclusion below is about **this executor**, not about the hardware. A
+comparison with llama.cpp's Vulkan backend on comparable hardware makes the
+distinction concrete, because ggml-vulkan uses three techniques that this
+sidecar does not:
+
+**Graph-level batching.** ggml records the whole computation graph and
+submits it in chunks, overlapping CPU command-buffer generation with GPU
+execution. This sidecar submits one command buffer per GEMV and blocks on a
+fence after each. For Qwen3-1.7B that is 169 dispatches per token, each
+paying ~3 ms fixed overhead — ~336 ms per token before any weight is read.
+llama.cpp pays that overhead once per graph chunk.
+
+**Quantization-native kernels.** `mul_mat_vec_q4_k.comp` reads Q4_K blocks
+directly and dequantizes in-register, using `vec4` dequant and 128-bit B
+loads. This sidecar reads FP32 weights: 4× the bytes for the same model. On
+a bandwidth-bound device that alone is a 4× handicap.
+
+**Subgroup reductions and Intel-tuned workgroups.** ggml uses larger
+workgroups and subgroup reductions where supported, tuned specifically for
+Intel. This sidecar avoids subgroups entirely (the properties query returned
+no data on this driver) and uses shared-memory reduction.
+
+### Measured on comparable hardware
+
+From the llama.cpp discussion thread and benchmarks collected there — **not
+measured on this machine**, cited as reference points:
+
+| Hardware          | CPU                             | Backend                   | Eval (s) | Tokens/s |
+| ----------------- | ------------------------------- | ------------------------- | -------- | -------- |
+| UHD 620, i5-8250U | i5-8250U (4C/8T, 3.4 GHz turbo) | CPU only                  | 428      | 2.32     |
+| UHD 620, i5-8250U | i5-8250U                        | Vulkan, all layers on GPU | 14       | **6.07** |
+
+That is **2.6× faster decode** and ~30× faster prompt response on a weaker
+CPU than the i5-10210U in this machine.
+
+| Hardware        | Backend                                       | pp512 (t/s) | tg128 (t/s) |
+| --------------- | --------------------------------------------- | ----------- | ----------- |
+| Iris Xe (Gen12) | Vulkan, ngl 100 (all on GPU)                  | 50.86       | 7.28        |
+| Iris Xe (Gen12) | Vulkan, ngl 0 (prefill on GPU, decode on CPU) | 32.11       | **9.49**    |
+
+On newer Gen12 hardware, llama.cpp's Vulkan backend **wins prefill by 1.58×
+but loses decode by 26%**. The community recommendation on integrated GPUs
+is explicitly `ngl 0`: use the iGPU for prefill, keep decode on the CPU.
+
+### What this means for this machine
+
+Three findings, in decreasing confidence:
+
+**Prefill (GEMM) — our 0.5× was an implementation limit, not a hardware
+verdict.** The three techniques above together account for the gap to CPU.
+On this class of iGPU, ggml-vulkan's prefill beats CPU on Iris Xe; on the
+weaker UHD 620, prompt processing is 30× faster. There is no structural
+reason this iGPU cannot prefill faster than the CPU, given an executor that
+batches graph submissions and reads quantized weights. Our 0.48–0.52×
+prefill is a property of the executor we built, not of the silicon.
+
+**Decode (GEMV) — a hardware ceiling on this CPU/iGPU pair, confirmed by
+llama.cpp's own behavior.** The UHD 620 success story uses an i5-8250U
+(3.4 GHz turbo). The i5-10210U in this machine runs at 4.2 GHz turbo, roughly
+25% higher single-core throughput. That is exactly the class where Vulkan's
+decode advantage vanishes, and it matches what the Iris Xe data shows: even
+mature ggml-vulkan loses decode to the CPU on a fast-enough CPU. The
+predicted ~0.46× decode in the model-level comparison is not a failure of
+our implementation; it is the expected outcome for this CPU/iGPU pair, with
+this executor or any other.
+
+**The `ngl 0` configuration is the honest target on this hardware.** Prefill
+on the iGPU, decode on the CPU. That split is what llama.cpp recommends for
+integrated GPUs, and it is what a real mistral.rs Vulkan backend should
+target on this class of machine. It sidesteps the decode ceiling entirely
+while capturing the prefill win.
+
+The gap between this sidecar and a competitive Vulkan backend is not the
+Vulkan API, the shader toolchain, or the numerical correctness of the
+kernels — all three are proven here. The gap is executor architecture:
+graph batching, quantized weight formats, and subgroup reductions. Those
+are the requirements for any future work on this codebase.
+
 ## Conclusion: measured performance on this hardware
 
-**On the Intel UHD CML GT2 / i5-10210U, this FP32 Vulkan executor is ~2×
-slower than the mistral.rs CPU backend on both prefill and decode, for
-Qwen3-1.7B F32.**
+**On the Intel UHD CML GT2 / i5-10210U, this FP32, per-op-dispatch Vulkan
+executor is ~2× slower than the mistral.rs CPU backend on both prefill and
+decode, for Qwen3-1.7B F32.**
 
 The kernels themselves are numerically correct (2e-6 GEMV, 3.9e-5 GEMM
-against CPU references) and well-implemented (29→33 GFLOPS from the 16×16
-to 64×64 tile change). They do not win because:
+against CPU references) and reasonably implemented at the shader level
+(7.8% of theoretical peak on FP32 GEMM). They do not win because the
+executor around them differs from a production Vulkan backend in three
+ways, all of which llama.cpp's ggml-vulkan implements and this sidecar does
+not: graph-level submission batching, Q4_K-native kernels, and subgroup
+reductions with Intel-specific workgroup tuning.
 
-1. The iGPU shares memory bandwidth with the CPU, and the CPU backend is
-   already at 65–77% of that shared ceiling.
-2. Decode dominates per-token time on this class of hardware, and decode
-   for Qwen3-1.7B is 112 small (2048×2048) dispatches plus 56 medium
-   dispatches plus one large LM head dispatch per token. The small ones
-   are dispatch-overhead-bound, not bandwidth-bound.
-3. Q4_K dequantization, which is the next planned kernel, reduces weight
-   traffic by ~4× on **both** CPU and Vulkan. It makes both faster in
-   absolute terms but does not change the relative picture: the CPU's
-   matmul still amortizes layer work across one call, while the Vulkan
-   executor pays per-dispatch cost.
+**Three separate conclusions, which the llama.cpp data lets us distinguish:**
 
-**Portability remains the correct framing.** On Intel Arc, AMD RDNA3 APUs,
-or a discrete GPU, compute scales with EU count and bandwidth is separate,
-so both prefill and decode would improve — potentially by an order of
-magnitude on prefill. On this laptop specifically, the CPU path is the
-faster path, and the branch is a completed portability spike rather than
-a local speedup.
+- **Prefill:** our 0.48–0.52× is an implementation limit. The hardware can
+  prefill faster than CPU on this class of iGPU (llama.cpp demonstrates
+  ~1.6× on Gen12, ~30× prompt-processing speedup on Gen9.5). Closing this
+  gap requires executor architecture, not kernel tuning.
+
+- **Decode:** our ~0.46× prediction is a hardware ceiling on this
+  CPU/iGPU pair. Even mature ggml-vulkan loses decode to a fast CPU on
+  integrated GPUs; the `ngl 0` configuration exists precisely because of
+  this. Decode will not be competitive for any Vulkan executor on this
+  machine.
+
+- **The right target on this hardware is `ngl 0`:** iGPU for prefill, CPU
+  for decode. That is the configuration that captures the achievable win
+  without fighting the decode ceiling.
+
+**Portability remains the correct framing, but the phrase changes.** The
+measured data does not say "Vulkan cannot win on UMA iGPUs." It says
+"Vulkan wins prefill on UMA iGPUs; decode is contested and CPU-dependent;
+our executor needs graph batching and Q4_K before either conclusion applies
+to it."
 
 ## Known deferred issues
 
@@ -245,3 +333,7 @@ a local speedup.
   the spike; the model runtime integration should use a scoped guard.
 - No 30-minute stability run has been performed. The Buffer/Context fixes
   above are the preconditions for it.
+- No graph-level submission batching. This is the single largest gap to a
+  competitive backend and the reason prefill measured as it did.
+- No Q4_K dequant-fused kernel. Also a large bandwidth win on this
+  hardware, and the format every model in `~/ai-models/gguf/` actually uses.

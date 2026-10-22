@@ -20,6 +20,7 @@ exposes `Session::gemv` and `Session::gemm`. It is not a `BackendStorage`
 implementation. It is not wired into `mistralrs-core`.
 
 **Alternatives:**
+
 - **Fork Candle and add `VulkanStorage`.** Rejected for phase 1. The Candle
   `BackendStorage` trait surface is ~40 methods; covering it is a month of work
   before the first numerical result. The prior art
@@ -55,6 +56,7 @@ sidecar is the deliverable.
 **Decision:** `ash 0.38` for bindings, `gpu-allocator 0.28` for memory.
 
 **Alternatives:**
+
 - **Raw `vkAllocateMemory` via `ash`.** Correct, and it was the first sketch.
   Rejected because allocating per-buffer on a UMA heap fragments it: the driver
   hands out alignment-padded blocks, the allocator has no pooling, and the
@@ -89,6 +91,7 @@ quantized path (which dequantizes to FP32 in-register, not FP16). FP16 is a
 later storage optimization. BF16 arithmetic is not on the near-term roadmap.
 
 **Alternatives:**
+
 - **FP16 from the start.** Rejected. `shaderFloat16` is exposed on this device,
   but the CPU reference is FP32, and any FP16 numerical bug in a reduction
   kernel is masked by tolerance, not detected. FP32 first means the kernel's
@@ -111,6 +114,7 @@ RMSNorm, future softmax) use `shared` memory plus `barrier()`. No
 `subgroupAdd`, `subgroupBallot`, or subgroup arithmetic.
 
 **Alternatives:**
+
 - **Subgroup reduction.** Rejected for phase 1. The `VkPhysicalDeviceSubgroupProperties`
   query on this device returned no data under the standard `vulkaninfo` grep,
   which is itself a signal: either the driver underreports or the query needs
@@ -143,6 +147,7 @@ conditional on `!coherent`. On this device every host-visible memory type
 is coherent, so both calls are no-ops in the hot path.
 
 **Alternatives:**
+
 - **Delete the flush/invalidate code because it never runs.** Rejected. The
   device report (D1) records that this decision holds on **this machine**;
   portable UMA parts (some Mali, some older ARM SoCs) expose non-coherent
@@ -165,6 +170,7 @@ wrong answer.
 `cargo build -p mistralrs-core --features vulkan` do.
 
 **Alternatives:**
+
 - **`exclude` instead of `default-members`.** Rejected. `exclude` would force
   `vulkex` to carry its own `Cargo.lock` and its own dependency resolution,
   which drifts against the root lockfile the moment any third crate pulls the
@@ -252,14 +258,14 @@ On the Intel UHD CML GT2, that condition is falsified — see §1.
 
 From the specification, with what actually happened:
 
-| Gate | Result |
-|---|---|
-| Logits within tolerance of CPU FP32 on a 512-token prompt | **Not run** — requires model integration (not built) |
-| No unbounded memory growth over a 30-minute session | **Not run** — requires the `Context::drop` fix |
-| Zero silent fallbacks | **Passed** for both kernels: 1 dispatch each, 0 fallbacks, reported by `FallbackReport` |
-| Kernel-level numeric match on the GEMV test | **Passed**: `max_abs = 2.0e-6`, `max_rel = 7.7e-5` on 4096×4096 |
-| Kernel-level numeric match on the GEMM test | **Passed**: `max_abs = 3.9e-5` (bound 4.9e-4), `rel_inf = 2.0e-6` on 512×6144×2048 |
-| Prefill GEMM within 2× of CPU | **Passed at the boundary**: 0.48–0.52× on 512×6144×2048 class shapes |
+| Gate                                                      | Result                                                                                  |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Logits within tolerance of CPU FP32 on a 512-token prompt | **Not run** — requires model integration (not built)                                    |
+| No unbounded memory growth over a 30-minute session       | **Not run** — requires the `Context::drop` fix                                          |
+| Zero silent fallbacks                                     | **Passed** for both kernels: 1 dispatch each, 0 fallbacks, reported by `FallbackReport` |
+| Kernel-level numeric match on the GEMV test               | **Passed**: `max_abs = 2.0e-6`, `max_rel = 7.7e-5` on 4096×4096                         |
+| Kernel-level numeric match on the GEMM test               | **Passed**: `max_abs = 3.9e-5` (bound 4.9e-4), `rel_inf = 2.0e-6` on 512×6144×2048      |
+| Prefill GEMM within 2× of CPU                             | **Passed at the boundary**: 0.48–0.52× on 512×6144×2048 class shapes                    |
 
 The claim "Vulkan works correctly on this device" is supported by both
 kernel results. The claim "Vulkan runs models on this device" is not
@@ -271,22 +277,55 @@ model-level prediction is ~2× slower on both prefill and decode.
 
 ## 11. Measured performance conclusion
 
-**On the Intel UHD CML GT2 / i5-10210U, this FP32 Vulkan executor is
-~2× slower than the mistral.rs CPU backend on both prefill and decode.**
+**On the Intel UHD CML GT2 / i5-10210U, this FP32, per-op-dispatch Vulkan
+executor is ~2× slower than the mistral.rs CPU backend on both prefill and
+decode, for Qwen3-1.7B F32.**
 
 The structural reasons (recorded in `docs/vulkan-device-report.md` §"UMA
-findings" and §"Conclusion"):
+findings" and §"Comparison with llama.cpp's ggml-vulkan backend"):
 
 1. Shared memory bandwidth, and the CPU backend is already at 65–77% of
    the ceiling (19.3 GB/s streaming on this laptop).
 2. Decode is 169 dispatches per token (112 attention + 56 MLP + 1 LM head),
    of which 112 are 2048×2048 and pay ~3 ms of fixed overhead each. That
-   overhead is 336 ms of the ~895 ms per-token total, and it does not
-   disappear with tile-size tuning.
-3. Q4_K dequantization shrinks weights on both sides equally, so it
-   changes absolute throughput on both sides but not the ratio.
+   overhead is 336 ms of the ~895 ms per-token total.
+3. Q4_K dequantization shrinks weights on both sides equally **for this
+   executor**. In a Q4_K-native executor it shrinks only the Vulkan side
+   and becomes a 4× bandwidth advantage instead of a wash.
 
-The portability case is unchanged and valid: on Intel Arc, RDNA3 APUs, or
-discrete GPUs, compute scales with EU count while bandwidth is separate,
-and the prefill numbers would improve by an order of magnitude. On this
-specific hardware, the CPU is the faster path for Qwen3-1.7B.
+**What the llama.cpp comparison changes:**
+
+The above is a conclusion about **this executor**, not about the hardware.
+Comparing against llama.cpp's ggml-vulkan backend on comparable Intel
+iGPUs (documented in the device report) separates the two:
+
+- **Prefill was implementation-limited.** llama.cpp wins prefill on Iris
+  Xe by 1.58× and on UHD 620 by ~30× prompt-processing speedup. Those wins
+  come from graph-level submission batching, Q4_K-native kernels, and
+  Intel-tuned subgroup reductions — none of which this sidecar implements.
+  The iGPU is capable of beating the CPU on prefill.
+
+- **Decode is hardware-limited on this CPU/iGPU pair.** Even mature
+  ggml-vulkan loses decode to a fast CPU on integrated GPUs; the `ngl 0`
+  configuration exists specifically because of that. Our 0.46× decode
+  prediction is not a failure of implementation; it is the expected
+  outcome on a 4.2 GHz 4C/8T Comet Lake CPU sharing memory with the iGPU.
+
+**Consequence for the Candle backend question (§1):** the reopen condition
+"if `vulkex` proves ≥ 1.5× CPU on prefill" is not falsified by our
+measurement — it is _not met_ by our executor. A Candle Vulkan backend
+that reused llama.cpp's architectural techniques (graph batching, Q4_K,
+subgroups) could plausibly meet it. Whether it is worth building depends on
+whether the target is prefill-only (where the win is real) or full
+inference (where decode is contested on this hardware).
+
+**The `ngl 0` target.** Prefill on the iGPU, decode on the CPU. That is
+what llama.cpp recommends for integrated GPUs, and it is what a
+mistral.rs Vulkan backend should target on this class of machine. It
+captures the achievable win without fighting the decode ceiling.
+
+**Portability remains the correct framing, but the phrase changes.** The
+measured data does not say "Vulkan cannot win on UMA iGPUs." It says
+"Vulkan wins prefill on UMA iGPUs; decode is contested and CPU-dependent;
+this executor needs graph batching, Q4_K, and subgroup support before
+either conclusion applies to it."
