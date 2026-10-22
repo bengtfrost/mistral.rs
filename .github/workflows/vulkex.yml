@@ -4,16 +4,16 @@ on:
   push:
     branches: [vulkex, master]
     paths:
-      - 'crates/vulkex/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/vulkex.yml'
+      - "crates/vulkex/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/vulkex.yml"
   pull_request:
     paths:
-      - 'crates/vulkex/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/vulkex.yml'
+      - "crates/vulkex/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/vulkex.yml"
   workflow_dispatch:
 
 permissions:
@@ -91,12 +91,13 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-22.04]
     env:
-      # 24.04's loader (1.3.275+) prefers VK_DRIVER_FILES and deprecates
-      # VK_ICD_FILENAMES; 22.04's loader (1.3.204) requires VK_ICD_FILENAMES
-      # because VK_DRIVER_FILES landed in 1.3.234. Both are set; each loader
-      # reads the one it understands and ignores the other.
-      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      # The lavapipe ICD filename differs between Ubuntu versions:
+      #   22.04: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      #   24.04: /usr/share/vulkan/icd.d/lvp_icd.json
+      # So it is discovered at runtime by the "discover lavapipe ICD" step
+      # below, not set here. The loader variable name also differs
+      # (VK_DRIVER_FILES on 1.3.234+, VK_ICD_FILENAMES on older); both are
+      # set by that step to cover both loaders.
       VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
       VK_LAYER_KHRONOS_validation_duplicate_message_limit: 0
     steps:
@@ -128,11 +129,27 @@ jobs:
             mesa-vulkan-drivers vulkan-tools \
             vulkan-validationlayers \
             libglvnd0 libgl1 libglx0 libegl1 libgles2
-          # Fail here, not later, if any package did not install.
           dpkg -l \
             vulkan-validationlayers \
             mesa-vulkan-drivers \
             libglvnd0 libgl1 libglx0 libegl1 libgles2
+
+      - name: discover lavapipe ICD and set loader vars
+        # Ubuntu 22.04 ships lvp_icd.x86_64.json; 24.04 ships lvp_icd.json.
+        # Hardcoding the 22.04 name broke 24.04: the loader received a
+        # non-existent path and vulkaninfo reported no devices, even though
+        # the ICD was on disk under a different name.
+        run: |
+          set -euo pipefail
+          ICD=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -1 || true)
+          if [ -z "$ICD" ]; then
+            echo "::error::no lavapipe ICD found in /usr/share/vulkan/icd.d/"
+            ls -la /usr/share/vulkan/icd.d/ || true
+            exit 1
+          fi
+          echo "Discovered lavapipe ICD: $ICD"
+          echo "VK_DRIVER_FILES=$ICD" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$ICD" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -150,8 +167,8 @@ jobs:
           ls -la /usr/share/vulkan/icd.d/ || true
           echo "--- explicit layers ---"
           ls -la /usr/share/vulkan/explicit_layer.d/ 2>/dev/null || echo "(none)"
-          echo "--- VK_DRIVER_FILES=${VK_DRIVER_FILES} ---"
-          echo "--- VK_ICD_FILENAMES=${VK_ICD_FILENAMES} ---"
+          echo "--- VK_DRIVER_FILES=${VK_DRIVER_FILES:-<unset>} ---"
+          echo "--- VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-<unset>} ---"
 
       - name: assert lavapipe and validation layer are visible
         run: |
