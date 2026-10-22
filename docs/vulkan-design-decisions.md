@@ -2,8 +2,9 @@
 
 **Scope:** the choices made to bring a Vulkan compute path to mistral.rs on
 Void GNU/Linux, Intel UHD CML GT2 (Gen9.5), 16.5 GB shared UMA.
-**Status:** spike (`crates/vulkex`) — GEMV and GEMM pass numerical gates;
-model integration is not yet done.
+**Status:** completed spike. GEMV and GEMM pass numerical gates. Model-level
+prediction (from kernel-level benchmark): ~2× slower than CPU on this device.
+See `docs/vulkan-device-report.md` for measurements.
 **Related:** `docs/vulkan-device-report.md` (D1, facts), `docs/vulkan-upstream-plan.md` (D6b, integration).
 
 Every section below states the decision, the alternatives considered, and the
@@ -31,11 +32,21 @@ implementation. It is not wired into `mistralrs-core`.
   runtime dependency (Dawn / naga) and a shader language decision that has
   nothing to do with the goals.
 
-**What would reopen it:** if `vulkex` proves ≥ 1.5× CPU on the shapes in
-`bench_shapes` and Q4_K dequant lands within budget, the case for full
-`BackendStorage` coverage becomes strong enough that a fork is worth the
-month. Until then, the sidecar delivers the same measured information at a
-fraction of the cost.
+**Status of the reopen condition (from the original decision):** the original
+wrote "if `vulkex` proves ≥ 1.5× CPU on the shapes in `bench_shapes` and Q4_K
+dequant lands within budget, the case for full `BackendStorage` coverage
+becomes strong enough that a fork is worth the month."
+
+**That condition is falsified on this hardware.** Measured: 0.48–0.52× CPU on
+prefill GEMM, and predicted 0.46× CPU on model-level decode. The sidecar
+approach was the right call — it produced the measurement that closed the
+question. The fork is not justified on the Intel UHD CML GT2.
+
+**What would reopen it now:** running `vulkex` on a stronger UMA device
+(Intel Arc, AMD RDNA3 APU, or discrete) where compute scales with EU count
+while bandwidth is separate. If `bench_shapes` on such a device shows
+≥ 1.5× CPU on prefill, the fork becomes worth the month. Until then, the
+sidecar is the deliverable.
 
 ---
 
@@ -54,6 +65,15 @@ fraction of the cost.
   binding works; the release cadence is the risk. `gpu-allocator` is maintained
   by the wgpu ecosystem (Mozilla / Google), has a faster release cadence, and
   exposes the same VMA-style managed allocation through a Rust-native API.
+
+**Known limitation:** `gpu-allocator 0.28` does not expose the chosen memory
+type index on `Allocation`. `Context::alloc_mapped` therefore uses the
+device-wide `all_host_visible_coherent` flag rather than per-allocation
+lookup. On this device the distinction is moot (all host-visible types
+coherent); on mixed-coherence devices the flush/invalidate path runs
+unnecessarily, which is correct but slow. A future `gpu-allocator` release
+that exposes `memory_type_index()` should switch this to a per-allocation
+lookup.
 
 **What would reopen it:** if `gpu-allocator`'s pool growth policy proves to
 waste memory on the 10.4 GiB heap during real model loads (visible as
@@ -105,14 +125,22 @@ version that reports explicit subgroup properties on this device, and a
 measured improvement over the shared-memory version that survives the
 `gemv_numerics` test on 4096×4096 shapes.
 
+**Note on the measured prefill ceiling:** 33 GFLOPS is ~7.8% of this
+device's theoretical 422 GFLOPS (24 EUs × 8 lanes × 2 FMA × 1.1 GHz). The
+16×16 → 64×64 tile change moved 29 → 33 GFLOPS (14% improvement), which
+is a strong signal that **the bottleneck is not tile reuse**. Further tiling
+work is unlikely to close the gap. Subgroup operations might, but only
+after the properties query works on this driver.
+
 ---
 
 ## 5. Coherent-heap shortcut, but keep the flush/invalidate path
 
-**Decision:** `Buffer` carries a `coherent: bool` flag populated from the
-memory type chosen by `gpu-allocator`. `Context::flush` and
-`Context::invalidate` are conditional on `!coherent`. On this device every
-host-visible memory type is coherent, so both calls are no-ops in the hot path.
+**Decision:** `Buffer` carries a `coherent: bool` flag populated from
+`Context::all_host_visible_coherent`, a device-wide property set at
+`Context::new` time. `Context::flush` and `Context::invalidate` are
+conditional on `!coherent`. On this device every host-visible memory type
+is coherent, so both calls are no-ops in the hot path.
 
 **Alternatives:**
 - **Delete the flush/invalidate code because it never runs.** Rejected. The
@@ -120,10 +148,12 @@ host-visible memory type is coherent, so both calls are no-ops in the hot path.
   portable UMA parts (some Mali, some older ARM SoCs) expose non-coherent
   host-visible memory. The conditional path is the interface that keeps
   `vulkex` reusable.
+- **Per-allocation lookup via `Allocation::memory_type_index()`.** Not
+  available in `gpu-allocator 0.28`. See §2 for the current approximation.
 
 **What would reopen it:** running `vulkex` on hardware where the coherence flag
 is false, at which point the conditional path is the only thing preventing a
-crash rather than the only thing preventing a wrong answer.
+wrong answer.
 
 ---
 
@@ -181,27 +211,40 @@ tested.
 **What would reopen it:** when the Vulkan path is measurably faster on the
 maintainers' hardware and passes the 30-minute stability test, promotion to a
 default feature of `mistralrs-core` (not the workspace) becomes reasonable.
+On the Intel UHD CML GT2, that condition is falsified — see §1.
 
 ---
 
-## 9. What is not built
+## 9. What is built and not built
 
-Recorded so a future reader does not assume these exist:
+**Built and passing numerical gates:**
 
-- **No Q4_K (or any quantized) kernel.** Qwen3.5-9B and every other model in
-  `~/ai-models/gguf/` is `Q4_K_M` / `Q4_K_XL`. The FP32 path can run
-  SafeTensors checkpoints; it cannot run those GGUFs without a dequant kernel.
+- `shaders/gemv.comp`: FP32 GEMV with shared-memory reduction (256 invocations,
+  one workgroup per output row).
+- `shaders/gemm.comp`: FP32 GEMM with 64×64 tiles and 4×4 register blocking
+  (256 invocations, 32 KB shared memory).
+- `tests/gemv_numerics.rs`: 4096×4096, `max_abs = 2.0e-6`, `max_rel = 7.7e-5`.
+- `tests/gemm_numerics.rs`: 512×6144×2048, `max_abs = 3.9e-5`,
+  `rel_inf = 2.0e-6`.
+- `tests/bench_shapes.rs`: prefill and decode benchmarks with the sgemm
+  reference (with the caveat noted in the device report that sgemm(n=1) is
+  not the CPU backend's actual GEMV path).
+
+**Not built (and why):**
+
+- **No Q4_K (or any quantized) kernel.** Every model in `~/ai-models/gguf/`
+  is `Q4_K_M` or `Q4_K_XL`. The FP32 path can run SafeTensors checkpoints;
+  it cannot run those GGUFs without a dequant kernel.
 - **No model integration.** `Session::gemv` and `Session::gemm` take raw
   buffers; they are not called by `mistralrs-core`.
-- **No 30-minute stability run.** `Buffer` still leaks its `Allocation` on
-  drop, and `Context::drop` does not call `vkDestroyDevice`. Both are noted
-  in D1 and must be fixed before that gate.
+- **No 30-minute stability run.** `Context::drop` does not call
+  `vkDestroyDevice`, and `Buffer` has no `Drop` (a forgotten `free_buffer`
+  leaks). Fix when integrating into a model runtime.
 - **No subgroup path, no FP16 storage path, no cooperative matrices.** All
   three are gated on capabilities or measurements not yet present.
 - **No mistral.rs CLI flag.** `--device vulkan` and
   `MISTRALRS_VULKAN_DEVICE` from the specification are **proposed**; the
-  current CLI has no such flag, and the upstream plan (D6b) proposes them
-  under different names that match the existing CLI's conventions.
+  current CLI has no such flag.
 
 ---
 
@@ -212,11 +255,38 @@ From the specification, with what actually happened:
 | Gate | Result |
 |---|---|
 | Logits within tolerance of CPU FP32 on a 512-token prompt | **Not run** — requires model integration (not built) |
-| No unbounded memory growth over a 30-minute session | **Not run** — requires the `Buffer` / `Context` drop fixes |
-| Zero silent fallbacks | **Passed** for GEMV: 1 dispatch, 0 fallbacks, reported by `FallbackReport` |
+| No unbounded memory growth over a 30-minute session | **Not run** — requires the `Context::drop` fix |
+| Zero silent fallbacks | **Passed** for both kernels: 1 dispatch each, 0 fallbacks, reported by `FallbackReport` |
 | Kernel-level numeric match on the GEMV test | **Passed**: `max_abs = 2.0e-6`, `max_rel = 7.7e-5` on 4096×4096 |
-| GEMM numerical match | **Not yet run** — the `bench_shapes` harness includes correctness, but the first pass reports timing only. Add a `gemm_numerics` test before the GEMM gate is claimed. |
+| Kernel-level numeric match on the GEMM test | **Passed**: `max_abs = 3.9e-5` (bound 4.9e-4), `rel_inf = 2.0e-6` on 512×6144×2048 |
+| Prefill GEMM within 2× of CPU | **Passed at the boundary**: 0.48–0.52× on 512×6144×2048 class shapes |
 
-The claim "Vulkan works on this device" is supported by the GEMV result. The
-claim "Vulkan runs models on this device" is not supported by anything in the
-current tree.
+The claim "Vulkan works correctly on this device" is supported by both
+kernel results. The claim "Vulkan runs models on this device" is not
+supported by anything in the current tree — the model integration is not
+built. The claim "Vulkan is faster than CPU on this device" is **falsified**:
+model-level prediction is ~2× slower on both prefill and decode.
+
+---
+
+## 11. Measured performance conclusion
+
+**On the Intel UHD CML GT2 / i5-10210U, this FP32 Vulkan executor is
+~2× slower than the mistral.rs CPU backend on both prefill and decode.**
+
+The structural reasons (recorded in `docs/vulkan-device-report.md` §"UMA
+findings" and §"Conclusion"):
+
+1. Shared memory bandwidth, and the CPU backend is already at 65–77% of
+   the ceiling (19.3 GB/s streaming on this laptop).
+2. Decode is 169 dispatches per token (112 attention + 56 MLP + 1 LM head),
+   of which 112 are 2048×2048 and pay ~3 ms of fixed overhead each. That
+   overhead is 336 ms of the ~895 ms per-token total, and it does not
+   disappear with tile-size tuning.
+3. Q4_K dequantization shrinks weights on both sides equally, so it
+   changes absolute throughput on both sides but not the ratio.
+
+The portability case is unchanged and valid: on Intel Arc, RDNA3 APUs, or
+discrete GPUs, compute scales with EU count while bandwidth is separate,
+and the prefill numbers would improve by an order of magnitude. On this
+specific hardware, the CPU is the faster path for Qwen3-1.7B.
