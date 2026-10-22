@@ -33,21 +33,69 @@ implementation. It is not wired into `mistralrs-core`.
   runtime dependency (Dawn / naga) and a shader language decision that has
   nothing to do with the goals.
 
-**Status of the reopen condition (from the original decision):** the original
-wrote "if `vulkex` proves ≥ 1.5× CPU on the shapes in `bench_shapes` and Q4_K
-dequant lands within budget, the case for full `BackendStorage` coverage
-becomes strong enough that a fork is worth the month."
+### Ownership context (recorded 2026-10-22)
 
-**That condition is falsified on this hardware.** Measured: 0.48–0.52× CPU on
-prefill GEMM, and predicted 0.46× CPU on model-level decode. The sidecar
-approach was the right call — it produced the measurement that closed the
-question. The fork is not justified on the Intel UHD CML GT2.
+Candle's supported backends are CPU, CUDA, Metal, and WASM. ROCm, Vulkan,
+DirectML, OpenVINO, and SYCL are absent — not "in progress", absent. The
+`Device` enum has no variant for any of them. mistral.rs inherits this list
+directly, because it consumes Candle as its tensor layer.
 
-**What would reopen it now:** running `vulkex` on a stronger UMA device
-(Intel Arc, AMD RDNA3 APU, or discrete) where compute scales with EU count
-while bandwidth is separate. If `bench_shapes` on such a device shows
-≥ 1.5× CPU on prefill, the fork becomes worth the month. Until then, the
-sidecar is the deliverable.
+This gap predates any corporate change. Candle was created in 2023 with the
+backends its maintainers used, on the hardware they had. It is emergent from
+engineering priorities, not a strategy designed in advance.
+
+What is new (public record, verified):
+
+- 2026-01: Hugging Face turned down a $500M investment from Nvidia at a
+  $7B valuation, explicitly to preserve independence.
+- 2026-08-27: Nvidia agreed to acquire Hugging Face for $12.93bn. Confirmed
+  by Nvidia; expected to close in H1 2027, subject to regulatory review.
+- Nvidia's public statements commit Hugging Face to "continue to support
+  multi-cloud and multi-accelerator development". Forbes' analysis notes
+  that degrading non-CUDA support "could undermine the value" of the asset.
+
+**The precise description is incentive alignment, not lock-in.** Candle will
+not be forced onto CUDA; Nvidia's own interest in preserving the developer
+funnel argues against overt degradation. But every dollar spent on Vulkan or
+ROCm support is a dollar not spent on the CUDA path that benefits Nvidia's
+hardware business. When a roadmap must choose between "make Intel iGPUs
+competitive" and "make Nvidia GPUs faster", the answer is now structurally
+pre-decided by ownership.
+
+**Consequence for this decision:** the sidecar was already the correct choice
+on engineering grounds (see the alternatives above). The ownership context
+adds a second reason: a Vulkan backend upstreamed to Candle is now less
+likely than it was when this decision was first recorded. A community fork
+or a mistral.rs-side executor are the realistic routes. This sidecar is a
+prototype for the second route — not a fork, but evidence of what the
+second route would cost.
+
+**What would reopen it:**
+
+- **Preference order unchanged:** if `vulkex` on some target device shows
+  ≥ 1.5× CPU on prefill GEMM with a graph-batched, Q4_K-native executor
+  (see §11), the case for full Candle `BackendStorage` coverage becomes
+  strong enough that a fork is worth the effort. Note that this now means
+  a _fork_, not an upstream contribution — the ownership context changes
+  where the code would land, not whether it is worth building.
+- **New condition added 2026-10-22:** if Candle upstreams a Vulkan backend
+  (or a credible ROCm backend, which would signal that non-CUDA investment
+  is not being structurally deprioritized), this entire decision should be
+  revisited against the actual implementation, not against the current
+  absence. A working upstream backend would make the sidecar approach
+  redundant for the framework-integration path.
+
+**What does not reopen it:** the acquisition itself. A change of ownership
+is not evidence that the engineering tradeoff has changed — the ~40-method
+`BackendStorage` surface is the same size as it was in 2023. The ownership
+context changes _who_ would build it and _whether it would land upstream_,
+not _what the work is_.
+
+The `ngl 0` split — prefill through Vulkan, decode through CPU — is the
+configuration that does not require Candle to change at all. It is worth
+recording as the pragmatic target on integrated GPUs, because it is the
+shape that a mistral.rs-side executor can achieve without upstream
+cooperation on either Candle or mistral.rs.
 
 ---
 
