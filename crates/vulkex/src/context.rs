@@ -198,14 +198,16 @@ impl Context {
                 .bind_buffer_memory(raw, alloc.memory(), alloc.offset())?
         };
 
-        // Coherence is per-allocation: read the flags of the memory type that
-        // gpu-allocator actually selected, not a device-wide approximation.
-        // On mixed-coherence devices this lets flush/invalidate run only when
-        // the specific allocation needs them.
-        let mem_type_idx = alloc.memory_type_index() as usize;
-        let coherent = self.mem_props.memory_types[mem_type_idx]
-            .property_flags
-            .contains(vk::MemoryPropertyFlags::HOST_COHERENT);
+        // gpu-allocator 0.28 does not expose the chosen memory type index on
+        // Allocation, so per-allocation coherence is not queryable through the
+        // public API. `all_host_visible_coherent` is a conservative device-wide
+        // approximation: on this CML GT2 every host-visible type carries
+        // HOST_COHERENT, so it is true and flush/invalidate short-circuit. On a
+        // mixed-coherence device it is false, causing flush/invalidate to run
+        // for every allocation even those that landed on a coherent type —
+        // wasteful but correct. A future gpu-allocator release with
+        // memory_type_index() should switch this to a per-allocation lookup.
+        let coherent = self.all_host_visible_coherent;
 
         let mapped = if alloc.mapped_ptr().is_some() {
             alloc.mapped_ptr().unwrap().as_ptr() as *mut u8

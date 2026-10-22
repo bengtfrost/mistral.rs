@@ -1,4 +1,4 @@
-use vulkex::GemvSession;
+use vulkex::Session;
 
 fn pseudo_random_f32(seed: u32, len: usize) -> Vec<f32> {
     let mut v = Vec::with_capacity(len);
@@ -36,7 +36,7 @@ fn gemv_fp32_matches_cpu_within_tolerance() {
         reference[r] = s;
     }
 
-    let mut session = GemvSession::new(target_pci()).expect("context");
+    let mut session = Session::new(target_pci()).expect("context");
     assert!(
         session.ctx.validation_enabled,
         "VK_INSTANCE_LAYERS requested VK_LAYER_KHRONOS_validation but the layer is not loaded"

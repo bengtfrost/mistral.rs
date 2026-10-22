@@ -17,3 +17,4 @@ docs/node_modules/
 docs/dist/
 docs/.astro/
 out/
+baseline_*.log

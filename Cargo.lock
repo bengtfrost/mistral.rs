@@ -7555,6 +7555,7 @@ dependencies = [
  "env_logger",
  "gpu-allocator",
  "log",
+ "matrixmultiply",
  "shaderc",
  "thiserror 2.0.18",
 ]

@@ -7,4 +7,4 @@ pub mod session;
 pub use buffer::Buffer;
 pub use context::Context;
 pub use fallback::FallbackReport;
-pub use session::GemvSession;
+pub use session::Session;

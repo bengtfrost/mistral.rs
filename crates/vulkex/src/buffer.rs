@@ -1,14 +1,19 @@
 use ash::vk;
+use gpu_allocator::vulkan::Allocation;
 
 pub struct Buffer {
     pub raw: vk::Buffer,
-    pub memory: vk::DeviceMemory,
+    pub alloc: Allocation,
     pub size: u64,
     pub coherent: bool,
     pub mapped: *mut u8,
 }
 
 impl Buffer {
+    pub fn memory(&self) -> vk::DeviceMemory {
+        unsafe { self.alloc.memory() }
+    }
+
     pub fn is_mapped(&self) -> bool {
         !self.mapped.is_null()
     }

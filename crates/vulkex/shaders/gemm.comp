@@ -1,0 +1,91 @@
+#version 450
+
+// 64x64 output tile per workgroup, 16x16 workgroups (256 invocations)
+// Each thread computes a 4x4 register tile of C.
+// Shared memory: 2 * 64 * 64 * 4 bytes = 32 KB, inside the 48 KB limit.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) readonly buffer ABuf { float A[]; };
+layout(set = 0, binding = 1) readonly buffer BBuf { float B[]; };
+layout(set = 0, binding = 2) writeonly buffer CBuf { float C[]; };
+
+layout(push_constant) uniform Push {
+    uint M;
+    uint N;
+    uint K;
+} pc;
+
+shared float As[64][64];
+shared float Bs[64][64];
+
+void main() {
+    uint lx = gl_LocalInvocationID.x;   // 0..15
+    uint ly = gl_LocalInvocationID.y;   // 0..15
+    uint wx = gl_WorkGroupID.x;
+    uint wy = gl_WorkGroupID.y;
+
+    uint row0 = wy * 64u + ly * 4u;     // first output row this thread owns
+    uint col0 = wx * 64u + lx * 4u;     // first output col this thread owns
+
+    float acc[4][4];
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            acc[i][j] = 0.0;
+
+    uint num_tiles = (pc.K + 63u) / 64u;
+
+    for (uint t = 0; t < num_tiles; t++) {
+        uint k0 = t * 64u;
+
+        // Load A tile: 64x64 slab from row wy*64, col k0
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                uint r = ly * 4u + uint(i);
+                uint c = lx * 4u + uint(j);
+                uint gr = wy * 64u + r;
+                uint gc = k0 + c;
+                As[r][c] = (gr < pc.M && gc < pc.K) ? A[gr * pc.K + gc] : 0.0;
+            }
+        }
+        // Load B tile: 64x64 slab from row k0, col wx*64
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                uint r = ly * 4u + uint(i);
+                uint c = lx * 4u + uint(j);
+                uint gr = k0 + r;
+                uint gc = wx * 64u + c;
+                Bs[r][c] = (gr < pc.K && gc < pc.N) ? B[gr * pc.N + gc] : 0.0;
+            }
+        }
+
+        barrier();
+
+        for (uint kk = 0; kk < 64u; kk++) {
+            float a0 = As[ly * 4u + 0u][kk];
+            float a1 = As[ly * 4u + 1u][kk];
+            float a2 = As[ly * 4u + 2u][kk];
+            float a3 = As[ly * 4u + 3u][kk];
+            float b0 = Bs[kk][lx * 4u + 0u];
+            float b1 = Bs[kk][lx * 4u + 1u];
+            float b2 = Bs[kk][lx * 4u + 2u];
+            float b3 = Bs[kk][lx * 4u + 3u];
+            acc[0][0] += a0*b0; acc[0][1] += a0*b1; acc[0][2] += a0*b2; acc[0][3] += a0*b3;
+            acc[1][0] += a1*b0; acc[1][1] += a1*b1; acc[1][2] += a1*b2; acc[1][3] += a1*b3;
+            acc[2][0] += a2*b0; acc[2][1] += a2*b1; acc[2][2] += a2*b2; acc[2][3] += a2*b3;
+            acc[3][0] += a3*b0; acc[3][1] += a3*b1; acc[3][2] += a3*b2; acc[3][3] += a3*b3;
+        }
+
+        barrier();
+    }
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            uint r = row0 + uint(i);
+            uint c = col0 + uint(j);
+            if (r < pc.M && c < pc.N) {
+                C[r * pc.N + c] = acc[i][j];
+            }
+        }
+    }
+}
