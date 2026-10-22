@@ -116,6 +116,14 @@ fn bind_descriptors(
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
+/// Eight arguments is one over clippy's default threshold. They are all
+/// distinct Vulkan handles and call-site-specific data; bundling them into a
+/// struct reintroduces a borrow conflict because `pipe` and `report` are both
+/// fields of `Session`, so a struct holding `&pipe` cannot be passed to a
+/// function that also borrows `report` mutably. The alternative — inlining
+/// the whole body into `dispatch_gemv` and `dispatch_gemm` — duplicates the
+/// submission logic in two places. Keep the arguments split.
+#[allow(clippy::too_many_arguments)]
 unsafe fn submit_dispatch(
     device: &ash::Device,
     queue: vk::Queue,

@@ -27,13 +27,13 @@ fn gemv_fp32_matches_cpu_within_tolerance() {
     let input = pseudo_random_f32(0x85EBCA6B, cols as usize);
 
     let mut reference = vec![0f64; rows as usize];
-    for r in 0..rows as usize {
+    for (r, slot) in reference.iter_mut().enumerate() {
         let base = r * cols as usize;
         let mut s = 0f64;
         for c in 0..cols as usize {
             s += weights[base + c] as f64 * input[c] as f64;
         }
-        reference[r] = s;
+        *slot = s;
     }
 
     let mut session = Session::new(target_pci()).expect("context");

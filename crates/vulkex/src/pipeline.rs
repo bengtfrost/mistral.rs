@@ -14,6 +14,16 @@ pub struct ComputePipeline {
 }
 
 impl ComputePipeline {
+    /// Create a compute pipeline from SPIR-V and a push-constant size.
+    ///
+    /// # Safety
+    ///
+    /// - `spv` must be a valid SPIR-V module for the Vulkan API version the
+    ///   instance was created with, with entry point `main`.
+    /// - `push_constant_size` must match the shader's `push_constant` block
+    ///   in size; a mismatch is undefined behavior in `vkCmdPushConstants`.
+    /// - `ctx` must be a live `Context`; the returned handles are children
+    ///   of `ctx.device` and invalidated by `Context::drop`.
     pub unsafe fn new(ctx: &crate::Context, spv: &[u32], push_constant_size: u32) -> Result<Self> {
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()

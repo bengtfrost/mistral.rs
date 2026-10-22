@@ -225,6 +225,13 @@ impl Context {
     }
 
     /// Explicit free. `Buffer` must not be used after this call.
+    ///
+    /// # Safety
+    ///
+    /// - The GPU must have finished any in-flight work referencing `buf`
+    ///   (fence wait on the last submission that touched it).
+    /// - `buf` is moved into the function and consumed. It must not be
+    ///   used (or freed again) after this call
     pub unsafe fn free_buffer(&mut self, buf: Buffer) {
         unsafe { self.device.destroy_buffer(buf.raw, None) };
         if let Err(e) = self.allocator.free(buf.alloc) {
@@ -232,6 +239,14 @@ impl Context {
         }
     }
 
+    /// Flush host writes to device visibility.
+    ///
+    /// # Safety
+    ///
+    /// - `buf` must be host-visible and host-mapped.
+    /// - The host must have written the buffer contents directly before
+    ///   calling this, with no in-flight GPU operation that reads or writes
+    ///   the same range.
     pub unsafe fn flush(&mut self, buf: &Buffer, report: &mut crate::fallback::FallbackReport) {
         if buf.coherent || !buf.is_mapped() {
             return;
@@ -244,6 +259,13 @@ impl Context {
         report.flushes += 1;
     }
 
+    /// Invalidate host mapping so device writes become visible to the host.
+    ///
+    /// # Safety
+    ///
+    /// - `buf` must be host-visible and host-mapped.
+    /// - The caller must have waited on the fence for the submission that
+    ///   wrote `buf`; otherwise the invalidate races with in-flight writes.
     pub unsafe fn invalidate(
         &mut self,
         buf: &Buffer,
