@@ -91,7 +91,11 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-22.04]
     env:
-      # Ubuntu 22.04 loader is 1.3.204; VK_DRIVER_FILES landed in 1.3.234.
+      # 24.04's loader (1.3.275+) prefers VK_DRIVER_FILES and deprecates
+      # VK_ICD_FILENAMES; 22.04's loader (1.3.204) requires VK_ICD_FILENAMES
+      # because VK_DRIVER_FILES landed in 1.3.234. Both are set; each loader
+      # reads the one it understands and ignores the other.
+      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
       VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
       VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
       VK_LAYER_KHRONOS_validation_duplicate_message_limit: 0
@@ -105,25 +109,66 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake git ninja-build python3
 
+      - name: Enable universe repository
+        # vulkan-validationlayers is in universe on 24.04. GitHub-hosted
+        # 24.04 runners ship with universe enabled, but the explicit
+        # `add-apt-repository` makes the intent visible and fails loudly if
+        # universe is somehow disabled on a custom image.
+        run: |
+          sudo add-apt-repository -y universe
+          sudo apt-get update
+
       - name: Vulkan loader, lavapipe, tools, validation layers
+        # libglvnd0/libgl1/libglx0/libegl1/libgles2 are runtime deps of
+        # mesa-vulkan-drivers' ICD on 24.04. Without them, the ICD fails to
+        # initialize and vkEnumeratePhysicalDevices returns nothing.
         run: |
           sudo apt-get install -y --no-install-recommends \
-            libvulkan-dev mesa-vulkan-drivers vulkan-tools vulkan-validationlayers
+            libvulkan-dev libvulkan1 \
+            mesa-vulkan-drivers vulkan-tools \
+            vulkan-validationlayers \
+            libglvnd0 libgl1 libglx0 libegl1 libgles2
+          # Fail here, not later, if any package did not install.
+          dpkg -l \
+            vulkan-validationlayers \
+            mesa-vulkan-drivers \
+            libglvnd0 libgl1 libglx0 libegl1 libgles2
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
           key: ${{ matrix.os }}-vulkex
 
+      - name: diagnose Vulkan setup
+        # Prints what vulkaninfo actually sees and what is on disk, so a
+        # failure in the assert step names the missing component instead of
+        # producing a generic exit code 1.
+        run: |
+          echo "--- vulkaninfo --summary ---"
+          vulkaninfo --summary || true
+          echo "--- ICD files ---"
+          ls -la /usr/share/vulkan/icd.d/ || true
+          echo "--- explicit layers ---"
+          ls -la /usr/share/vulkan/explicit_layer.d/ 2>/dev/null || echo "(none)"
+          echo "--- VK_DRIVER_FILES=${VK_DRIVER_FILES} ---"
+          echo "--- VK_ICD_FILENAMES=${VK_ICD_FILENAMES} ---"
+
       - name: assert lavapipe and validation layer are visible
         run: |
           set -euo pipefail
-          vulkaninfo --summary
-          vulkaninfo --summary | grep -q 'VK_LAYER_KHRONOS_validation' \
-            || { echo "::error::validation layer not enumerated"; exit 1; }
-          vulkaninfo --summary | grep -qiE 'llvmpipe|lavapipe|TYPE_CPU' \
-            || { echo "::error::lavapipe not enumerated"; exit 1; }
-          echo "ok"
+          if ! vulkaninfo --summary 2>/dev/null | grep -qiE 'llvmpipe|lavapipe|TYPE_CPU'; then
+            echo "::error::lavapipe not enumerated (see diagnose step above)"
+            exit 1
+          fi
+          if ! vulkaninfo --summary 2>/dev/null | grep -q 'VK_LAYER_KHRONOS_validation'; then
+            echo "::error::VK_LAYER_KHRONOS_validation not enumerated; trying VK_LAYER_PATH fallback"
+            export VK_LAYER_PATH=/usr/share/vulkan/explicit_layer.d
+            if ! vulkaninfo --summary | grep -q 'VK_LAYER_KHRONOS_validation'; then
+              echo "::error::layer not visible even with VK_LAYER_PATH set (see diagnose step above)"
+              exit 1
+            fi
+          fi
+          echo "ok: lavapipe + validation layer present"
 
       - name: build
         run: cargo build -p vulkex --locked
