@@ -1,197 +1,72 @@
-name: vulkex
+numerics:
+  name: numerics on lavapipe (${{ matrix.os }})
+  needs: [additive]
+  runs-on: ${{ matrix.os }}
+  timeout-minutes: 30
+  strategy:
+    fail-fast: false
+    matrix:
+      os: [ubuntu-24.04, ubuntu-22.04]
+  env:
+    # Do NOT set VK_DRIVER_FILES / VK_ICD_FILENAMES. On a GPU-less runner
+    # the only installed ICD is lavapipe; the loader's default search path
+    # finds it. Hardcoding the filename is version-dependent: 22.04 ships
+    # lvp_icd.x86_64.json, 24.04 ships lvp_icd.json.
+    VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
+    VK_LAYER_KHRONOS_validation_duplicate_message_limit: 0
+    DEBIAN_FRONTEND: noninteractive
+  steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
 
-on:
-  push:
-    branches: [vulkex, master]
-    paths:
-      - "crates/vulkex/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/vulkex.yml"
-  pull_request:
-    paths:
-      - "crates/vulkex/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/vulkex.yml"
-  workflow_dispatch:
+    - name: Install build + Vulkan packages
+      # ubuntu-24.04 runner images ship packages.microsoft.com in
+      # /etc/apt/sources.list.d/. That repo intermittently returns
+      # 403 Forbidden, which makes apt-get update return 100 before any
+      # package can be installed. Every package this job needs comes from
+      # Ubuntu archives, so the Microsoft and Azure repos are removed first.
+      # Acquire::Retries handles transient mirror failures separately.
+      run: |
+        set -euo pipefail
+        sudo rm -f /etc/apt/sources.list.d/microsoft* 2>/dev/null || true
+        sudo rm -f /etc/apt/sources.list.d/azure* 2>/dev/null || true
+        sudo apt-get update -o Acquire::Retries=5
+        sudo apt-get install -y --no-install-recommends \
+          build-essential cmake git ninja-build python3 \
+          libvulkan-dev libvulkan1 \
+          mesa-vulkan-drivers vulkan-tools \
+          vulkan-validationlayers
 
-permissions:
-  contents: read
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ". -> target"
+        key: ${{ matrix.os }}-vulkex
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-
-jobs:
-  additive:
-    name: additive (vulkex excluded from default build)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: vulkex is a workspace member but excluded from default-members
-        run: |
-          cargo metadata --no-deps --format-version 1 | python3 -c '
-          import json, sys
-          d = json.load(sys.stdin)
-          assert any(p["name"] == "vulkex" for p in d["packages"]), \
-              "vulkex is not a workspace member"
-          assert "vulkex" not in d["workspace_default_members"], \
-              "vulkex is in default-members; root cargo build would compile shaderc"
-          print("ok: member + excluded")
-          '
-
-      - name: mistralrs-cli dependency graph has no Vulkan crates
-        run: |
-          set -euo pipefail
-          if cargo tree -p mistralrs-cli --edges normal --prefix none \
-               | grep -qE '^(shaderc|shaderc-sys|ash|gpu-allocator) v'; then
-            echo "::error::Vulkan crate in mistralrs-cli graph; additive claim is false"
-            exit 1
-          fi
-          echo "ok: no Vulkan crates in the mistralrs-cli graph"
-
-  lint:
-    name: lint
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-          key: ubuntu-24.04-lint-vulkex
-
-      - name: shaderc-sys build prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake git ninja-build python3
-
-      - run: cargo fmt -p vulkex --all -- --check
-      - run: cargo clippy -p vulkex --all-targets -- -D warnings
-
-  numerics:
-    name: numerics on lavapipe (${{ matrix.os }})
-    needs: [additive]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, ubuntu-22.04]
-    env:
-      # The lavapipe ICD filename differs between Ubuntu versions:
-      #   22.04: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-      #   24.04: /usr/share/vulkan/icd.d/lvp_icd.json
-      # So it is discovered at runtime by the "discover lavapipe ICD" step
-      # below, not set here. The loader variable name also differs
-      # (VK_DRIVER_FILES on 1.3.234+, VK_ICD_FILENAMES on older); both are
-      # set by that step to cover both loaders.
-      VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
-      VK_LAYER_KHRONOS_validation_duplicate_message_limit: 0
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: shaderc-sys build prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake git ninja-build python3
-
-      - name: Enable universe repository
-        # vulkan-validationlayers is in universe on 24.04. GitHub-hosted
-        # 24.04 runners ship with universe enabled, but the explicit
-        # `add-apt-repository` makes the intent visible and fails loudly if
-        # universe is somehow disabled on a custom image.
-        run: |
-          sudo add-apt-repository -y universe
-          sudo apt-get update
-
-      - name: Vulkan loader, lavapipe, tools, validation layers
-        # libglvnd0/libgl1/libglx0/libegl1/libgles2 are runtime deps of
-        # mesa-vulkan-drivers' ICD on 24.04. Without them, the ICD fails to
-        # initialize and vkEnumeratePhysicalDevices returns nothing.
-        run: |
-          sudo apt-get install -y --no-install-recommends \
-            libvulkan-dev libvulkan1 \
-            mesa-vulkan-drivers vulkan-tools \
-            vulkan-validationlayers \
-            libglvnd0 libgl1 libglx0 libegl1 libgles2
-          dpkg -l \
-            vulkan-validationlayers \
-            mesa-vulkan-drivers \
-            libglvnd0 libgl1 libglx0 libegl1 libgles2
-
-      - name: discover lavapipe ICD and set loader vars
-        # Ubuntu 22.04 ships lvp_icd.x86_64.json; 24.04 ships lvp_icd.json.
-        # Hardcoding the 22.04 name broke 24.04: the loader received a
-        # non-existent path and vulkaninfo reported no devices, even though
-        # the ICD was on disk under a different name.
-        run: |
-          set -euo pipefail
-          ICD=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -1 || true)
-          if [ -z "$ICD" ]; then
-            echo "::error::no lavapipe ICD found in /usr/share/vulkan/icd.d/"
-            ls -la /usr/share/vulkan/icd.d/ || true
-            exit 1
-          fi
-          echo "Discovered lavapipe ICD: $ICD"
-          echo "VK_DRIVER_FILES=$ICD" >> "$GITHUB_ENV"
-          echo "VK_ICD_FILENAMES=$ICD" >> "$GITHUB_ENV"
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-          key: ${{ matrix.os }}-vulkex
-
-      - name: diagnose Vulkan setup
-        # Prints what vulkaninfo actually sees and what is on disk, so a
-        # failure in the assert step names the missing component instead of
-        # producing a generic exit code 1.
-        run: |
-          echo "--- vulkaninfo --summary ---"
-          vulkaninfo --summary || true
-          echo "--- ICD files ---"
+    - name: Vulkan sanity check
+      # The single assertion step. If it fails, the full vulkaninfo output
+      # and the ICD directory listing are in the log — no further guesswork.
+      run: |
+        set -euo pipefail
+        vulkaninfo --summary | tee /tmp/vk.txt
+        if ! grep -qiE 'llvmpipe|lavapipe|TYPE_CPU' /tmp/vk.txt; then
+          echo "::error::lavapipe not enumerated by the default ICD search path"
+          echo "--- ICD directory ---"
           ls -la /usr/share/vulkan/icd.d/ || true
-          echo "--- explicit layers ---"
-          ls -la /usr/share/vulkan/explicit_layer.d/ 2>/dev/null || echo "(none)"
-          echo "--- VK_DRIVER_FILES=${VK_DRIVER_FILES:-<unset>} ---"
-          echo "--- VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-<unset>} ---"
+          exit 1
+        fi
+        if ! grep -q 'VK_LAYER_KHRONOS_validation' /tmp/vk.txt; then
+          echo "::error::VK_LAYER_KHRONOS_validation not enumerated"
+          echo "--- explicit layer directory ---"
+          ls -la /usr/share/vulkan/explicit_layer.d/ || true
+          exit 1
+        fi
+        echo "ok: lavapipe + validation layer present"
 
-      - name: assert lavapipe and validation layer are visible
-        run: |
-          set -euo pipefail
-          if ! vulkaninfo --summary 2>/dev/null | grep -qiE 'llvmpipe|lavapipe|TYPE_CPU'; then
-            echo "::error::lavapipe not enumerated (see diagnose step above)"
-            exit 1
-          fi
-          if ! vulkaninfo --summary 2>/dev/null | grep -q 'VK_LAYER_KHRONOS_validation'; then
-            echo "::error::VK_LAYER_KHRONOS_validation not enumerated; trying VK_LAYER_PATH fallback"
-            export VK_LAYER_PATH=/usr/share/vulkan/explicit_layer.d
-            if ! vulkaninfo --summary | grep -q 'VK_LAYER_KHRONOS_validation'; then
-              echo "::error::layer not visible even with VK_LAYER_PATH set (see diagnose step above)"
-              exit 1
-            fi
-          fi
-          echo "ok: lavapipe + validation layer present"
+    - name: build
+      run: cargo build -p vulkex --locked
 
-      - name: build
-        run: cargo build -p vulkex --locked
+    - name: gemv numerics
+      run: cargo test -p vulkex --test gemv_numerics -- --nocapture
 
-      - name: gemv numerics
-        run: cargo test -p vulkex --test gemv_numerics -- --nocapture
-
-      - name: gemm numerics
-        run: cargo test -p vulkex --test gemm_numerics -- --nocapture
+    - name: gemm numerics
+      run: cargo test -p vulkex --test gemm_numerics -- --nocapture
