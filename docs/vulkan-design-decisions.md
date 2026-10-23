@@ -70,6 +70,54 @@ or a mistral.rs-side executor are the realistic routes. This sidecar is a
 prototype for the second route — not a fork, but evidence of what the
 second route would cost.
 
+### Platform coverage (recorded 2026-10-22)
+
+Candle's supported backends — CPU, CUDA, Metal, WASM — map closely to the
+hardware available to its maintainers at creation time: Macs and Nvidia
+GPUs. The absence of other backends is emergent rather than deliberate,
+and it is shared with most of the ML ecosystem (PyTorch has the same
+CUDA-first hierarchy). The effect is a real constraint regardless of
+intent.
+
+Not covered:
+
+- Intel integrated graphics — most consumer laptops, including the
+  reference machine for this project
+- AMD GPUs outside ROCm — which is most consumer AMD hardware
+- Qualcomm Snapdragon X and most non-Apple ARM
+- Development on commodity hardware without an Nvidia card
+
+The CPU backend is competent — measured at ~65 GFLOPS (~80% of AVX2
+theoretical peak) on the reference machine — but CPU is not what anyone
+chooses for a GPU-capable workload. The practical result is that on most
+consumer hardware, Candle offers one usable path, and it is the slow one.
+
+Two projects show the constraint is a design choice, not a technical
+necessity:
+
+- **llama.cpp** maintains hand-written backends for six GPU APIs across
+  all vendors, contributed by users of each platform. GGUF is the
+  organizing goal, not any specific vendor.
+- **Burn** compiles one kernel language (CubeCL) to CUDA, ROCm, Metal,
+  Vulkan, WebGPU, and CPU. Backend breadth is a first-class design goal;
+  the backend list reflects what the compiler emits, not what the
+  maintainers happen to own.
+
+The Nvidia–Hugging Face acquisition (see "Ownership context" above) makes
+the pattern less likely to change from within: every dollar spent on
+Vulkan or ROCm is a dollar not spent on the path that benefits Nvidia's
+hardware business. Nvidia's public commitments argue against overt
+degradation, so the effect is soft — but the direction of default effort
+is now set by ownership.
+
+**Consequence for this project:** the sidecar decision (above) is the
+engineering response to a constraint that will not close from upstream. A
+Candle Vulkan backend is improbable not because the work is technically
+hard (it is) but because the framework's owners have no business reason
+to prioritize it. The correct posture is to treat Candle as a
+CUDA/Metal-first framework with a competent CPU fallback, build what is
+missing (this sidecar), and not wait for upstream to change.
+
 **What would reopen it:**
 
 - **Preference order unchanged:** if `vulkex` on some target device shows
