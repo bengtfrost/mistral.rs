@@ -1,3 +1,5 @@
+> **Personal fork — branch `vulkex`.** This branch contains a standalone Vulkan compute executor spike in [`crates/vulkex`](crates/vulkex) with findings in [`docs/vulkan-design-decisions.md`](docs/vulkan-design-decisions.md), [`docs/vulkan-device-report.md`](docs/vulkan-device-report.md), and [`docs/vulkan-upstream-plan.md`](docs/vulkan-upstream-plan.md). Frozen reference: tag [`vulkex-v1`](https://github.com/bengtfrost/mistral.rs/tree/vulkex-v1). Companion finding: [bengtfrost/burn-probe](https://github.com/bengtfrost/burn-probe). Upstream mistral.rs README below.
+
 <a name="top"></a>
 <!--
 <h1 align="center">
