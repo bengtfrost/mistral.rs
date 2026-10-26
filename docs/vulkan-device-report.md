@@ -273,6 +273,16 @@ predicted ~0.46× decode in the model-level comparison is not a failure of
 our implementation; it is the expected outcome for this CPU/iGPU pair, with
 this executor or any other.
 
+**f16 is a real but insufficient win.** The burn-probe companion measured
+the same GEMV shapes in f16 on this hardware. On the LM head, f16 halves
+the time (124.1 → 47.3 ms, 2.62×) and reaches 13.2 GB/s effective. On
+MLP-down, f16 halves the time (5.72 → 2.80 ms) and reaches 9.0 GB/s.
+Both beat burn-probe's AVX2 reference (14.6–15.2 GB/s), but neither
+beats the mistral.rs CPU backend (19.3 GB/s), because the CPU moves
+twice the bytes at a rate that is higher still. The dtype ladder has
+three rungs — f32, f16, Q4_K — and this is the middle. Q4_K, not f16,
+is the rung that would let Vulkan beat the CPU on this hardware.
+
 **The `ngl 0` configuration is the honest target on this hardware.** Prefill
 on the iGPU, decode on the CPU. That split is what llama.cpp recommends for
 integrated GPUs, and it is what a real mistral.rs Vulkan backend should

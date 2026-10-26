@@ -1,7 +1,6 @@
 # vulkex
 
-**Companion finding:** [bengtfrost/burn-probe](https://github.com/bengtfrost/burn-probe) — the same hardware, measured through a framework (Burn/CubeCL) rather than a hand-written executor. Lands on the same production conclusion and reaches f16 GEMV by halving bytes; prefill remains structurally behind llama.cpp for the same reasons documented in [`docs/vulkan-design-decisions.md`](../../docs/vulkan-design-decisions.md).
-
+**Companion finding: bengtfrost/burn-probe — the same hardware, measured through a framework (Burn/CubeCL) rather than a hand-written executor. Lands on the same production conclusion, and quantifies the f16 step on the decode path: LM head 124.1 → 47.3 ms (2.62×) and MLP-down 5.72 → 2.80 ms (2.04×). f16 beats burn-probe's AVX2 reference on those two shapes but not the mistral.rs CPU backend's 19.3 GB/s streaming rate. Prefill remains structurally behind llama.cpp for the reasons documented in docs/vulkan-design-decisions.md.
 
 Standalone Vulkan compute executor sidecar for mistral.rs. Not a Candle
 `BackendStorage` implementation. Not wired into `mistralrs-core`. Not

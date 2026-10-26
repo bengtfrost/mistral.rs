@@ -406,6 +406,11 @@ iGPUs (documented in the device report) separates the two:
   configuration exists specifically because of that. Our 0.46× decode
   prediction is not a failure of implementation; it is the expected
   outcome on a 4.2 GHz 4C/8T Comet Lake CPU sharing memory with the iGPU.
+  The f16 data point (burn-probe, same hardware) confirms the ceiling:
+  halving the bytes halves the time on bandwidth-bound shapes (LM head
+  124.1 → 47.3 ms), but f16 Vulkan at 13.2 GB/s is still below the CPU
+  backend's 19.3 GB/s. f16 closes the gap to AVX2; it does not close the
+  gap to the mistral.rs CPU backend.
 
 **Consequence for the Candle backend question (§1):** the reopen condition
 "if `vulkex` proves ≥ 1.5× CPU on prefill" is not falsified by our
