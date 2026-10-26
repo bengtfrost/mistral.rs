@@ -1,5 +1,8 @@
 # vulkex
 
+**Companion finding:** [bengtfrost/burn-probe](https://github.com/bengtfrost/burn-probe) — the same hardware, measured through a framework (Burn/CubeCL) rather than a hand-written executor. Lands on the same production conclusion and reaches f16 GEMV by halving bytes; prefill remains structurally behind llama.cpp for the same reasons documented in [`docs/vulkan-design-decisions.md`](../../docs/vulkan-design-decisions.md).
+
+
 Standalone Vulkan compute executor sidecar for mistral.rs. Not a Candle
 `BackendStorage` implementation. Not wired into `mistralrs-core`. Not
 reachable from the CLI.
